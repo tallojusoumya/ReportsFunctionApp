@@ -3,8 +3,11 @@ import azure.functions as func
 import psycopg2
 import pandas as pd
 import os
+import requests
+from io import BytesIO
 
 DB_URL = os.getenv("DB_URL")
+SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 
 def run_query(sql: str) -> pd.DataFrame:
     try:
@@ -16,7 +19,21 @@ def run_query(sql: str) -> pd.DataFrame:
         logging.error(f"Database error: {e}")
         return pd.DataFrame()
 
+def upload_to_slack(df: pd.DataFrame, channel: str, filename="missingSequence.xlsx"):
+    output = BytesIO()
+    df.to_excel(output, index=False)
+    output.seek(0)
+    response = requests.post(
+        "https://slack.com/api/files.upload",
+        headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
+        files={"file": (filename, output, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"channels": channel, "title": filename}
+    )
+    return response.json()
+
 def main(req: func.HttpRequest) -> func.HttpResponse:
+    channel_id = req.form.get("channel_id") if req.form else None
+
     sql = """ 
     SELECT
   mn.entry_prefix || LPAD(mn.expected_num::TEXT, 4, '0') AS missing_entry_number,
@@ -105,6 +122,12 @@ ORDER BY
   missing_entry_number;
     """
     df = run_query(sql)
+
     if df.empty:
-        return func.HttpResponse("No missing sequence records found")
-    return func.HttpResponse(df.to_csv(index=False), mimetype="text/csv")
+        return func.HttpResponse('{"response_type":"in_channel","text":"✅ No missing sequences found"}', mimetype="application/json")
+
+    res = upload_to_slack(df, channel_id, filename="missingSequence.xlsx")
+    if res.get("ok"):
+        return func.HttpResponse('{"response_type":"in_channel","text":"⚠️ Missing sequences detected, Excel file uploaded 📂"}', mimetype="application/json")
+    else:
+        return func.HttpResponse(f'{{"response_type":"ephemeral","text":"❌ Slack upload failed: {res.get("error")}"}}', mimetype="application/json")

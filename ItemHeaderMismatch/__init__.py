@@ -3,8 +3,11 @@ import azure.functions as func
 import psycopg2
 import pandas as pd
 import os
+import requests
+from io import BytesIO
 
 DB_URL = os.getenv("DB_URL")
+SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")   # Add this in Azure Function App settings
 
 def run_query(sql: str) -> pd.DataFrame:
     try:
@@ -16,7 +19,29 @@ def run_query(sql: str) -> pd.DataFrame:
         logging.error(f"Database error: {e}")
         return pd.DataFrame()
 
+def upload_to_slack(df: pd.DataFrame, channel: str, filename="headerMismatch.xlsx"):
+    """Upload DataFrame to Slack as Excel file"""
+    output = BytesIO()
+    df.to_excel(output, index=False)
+    output.seek(0)
+
+    response = requests.post(
+        "https://slack.com/api/files.upload",
+        headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
+        files={
+            "file": (filename, output, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        },
+        data={
+            "channels": channel,
+            "title": filename
+        }
+    )
+    return response.json()
+
 def main(req: func.HttpRequest) -> func.HttpResponse:
+    # Slack sends channel_id, user_name, etc. in form data
+    channel_id = req.form.get("channel_id") if req.form else None
+
     sql = """ 
     SELECT *,
        -- Calculate the difference amount between net_amount and calculated_net_amount
@@ -142,9 +167,26 @@ CURRENT_DATE
       database_client.name
 ) AS sale_summary
 WHERE ABS(calculated_net_amount - net_amount) <> 0;
+"""
 
-    """
     df = run_query(sql)
+
     if df.empty:
-        return func.HttpResponse("No item-header mismatches found")
-    return func.HttpResponse(df.to_csv(index=False), mimetype="text/csv")
+        # Respond directly in Slack with message
+        return func.HttpResponse(
+            '{"response_type": "in_channel", "text": "✅ No item-header mismatches found"}',
+            mimetype="application/json"
+        )
+    else:
+        # Upload Excel to Slack
+        res = upload_to_slack(df, channel_id, filename="headerMismatch.xlsx")
+        if res.get("ok"):
+            return func.HttpResponse(
+                '{"response_type": "in_channel", "text": "⚠️ Found mismatches, Excel file uploaded 📂"}',
+                mimetype="application/json"
+            )
+        else:
+            return func.HttpResponse(
+                f'{{"response_type": "ephemeral", "text": "❌ Slack upload failed: {res.get("error")}"}}',
+                mimetype="application/json"
+            )
