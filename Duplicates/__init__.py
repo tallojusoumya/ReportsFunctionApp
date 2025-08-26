@@ -3,9 +3,8 @@ import azure.functions as func
 import psycopg2
 import pandas as pd
 import os
-import requests
-from io import BytesIO
 import urllib.parse
+from utils.slack_uploader import upload_to_slack_external
 
 DB_URL = os.getenv("DB_URL")
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
@@ -29,28 +28,6 @@ def run_query(sql: str) -> pd.DataFrame:
         print(f"[DEBUG] run_query: Exception occurred: {e}")
         return pd.DataFrame()
 
-def upload_to_slack(df: pd.DataFrame, filename="duplicateInvoices.xlsx"):
-    print(f"[DEBUG] upload_to_slack: Preparing to upload. rows={len(df)}, filename={filename}")
-    output = BytesIO()
-    df.to_excel(output, index=False)
-    output.seek(0)
-    print("[DEBUG] upload_to_slack: Sending request to Slack API...")
-    response = requests.post(
-        "https://slack.com/api/files.uploadV2",
-        headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
-        files={"file": (filename, output, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-        data={"channels": CHANNEL_ID, "title": filename}
-    )
-    print(f"[DEBUG] upload_to_slack: Slack response status_code={response.status_code}")
-
-    try:
-        json_res = response.json()
-    except Exception as e:
-        print(f"[DEBUG] upload_to_slack: Failed to parse JSON response: {e}")
-        json_res = {"ok": False, "error": "invalid_json"}
-
-    print(f"[DEBUG] upload_to_slack: Slack response ok={json_res.get('ok')}, error={json_res.get('error')}")
-    return json_res
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     print("[DEBUG] main: Function invoked")
@@ -62,20 +39,20 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         body = ""
     data = urllib.parse.parse_qs(body)
 
-    sql = """ 
+    sql = """
     SELECT
-        database_salehead.id,
-        database_salehead.entry_number,
-        database_salehead.entry_date,
-        database_salehead.branch_id,
-        database_branch.name,
-        database_branch.domain
+        sh.id,
+        sh.entry_number,
+        sh.entry_date,
+        sh.branch_id,
+        b.name,
+        b.domain
     FROM
-        database_salehead
+        database_salehead sh
     JOIN
-        database_branch ON database_salehead.branch_id = database_branch.id
+        database_branch b ON sh.branch_id = b.id
     WHERE
-        database_salehead.entry_number IN (
+        sh.entry_number IN (
             SELECT entry_number
             FROM database_salehead
             WHERE
@@ -85,9 +62,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             GROUP BY entry_number
             HAVING COUNT(*) > 1
         )
-        AND database_salehead.entry_date IS NOT NULL
-        AND database_salehead.entry_date <> ''
-        AND CAST(database_salehead.entry_date AS DATE) = CURRENT_DATE - INTERVAL '1 DAY';
+        AND sh.entry_date IS NOT NULL
+        AND sh.entry_date <> ''
+        AND CAST(sh.entry_date AS DATE) = CURRENT_DATE - INTERVAL '1 DAY';
     """
 
     print("[DEBUG] main: Executing duplicate invoices query...")
@@ -97,16 +74,14 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     if df.empty:
         print("[DEBUG] main: No duplicates found path taken")
         return func.HttpResponse(
-            f'{{"response_type":"ephemeral","text":"✅ No duplicate invoices found."}}',
+            '{"response_type":"ephemeral","text":"✅ No duplicate invoices found."}',
             mimetype="application/json"
         )
 
-   
     print("[DEBUG] main: Uploading results to Slack...")
-    res = upload_to_slack(df, filename="duplicateInvoices.xlsx")
+    res = upload_to_slack_external(df, "duplicateInvoices.xlsx", CHANNEL_ID)
     print(f"[DEBUG] main: Upload completed. ok={res.get('ok')}, error={res.get('error')}")
 
-   
     if res.get("ok"):
         return func.HttpResponse(
             '{"response_type":"in_channel","text":"⚠️ Found duplicate invoices, Excel file uploaded 📂"}',

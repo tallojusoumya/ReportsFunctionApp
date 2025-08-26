@@ -3,9 +3,8 @@ import azure.functions as func
 import psycopg2
 import pandas as pd
 import os
-import requests
-from io import BytesIO
 import urllib.parse
+from utils.slack_uploader import upload_to_slack_external
 
 # Load env vars
 DB_URL = os.getenv("DB_URL")
@@ -30,28 +29,6 @@ def run_query(sql: str) -> pd.DataFrame:
         print(f"[DEBUG] run_query: Exception occurred: {e}")
         return pd.DataFrame()
 
-def upload_to_slack(df: pd.DataFrame, filename="highQuantity.xlsx"):
-    print(f"[DEBUG] upload_to_slack: Preparing to upload. rows={len(df)}, filename={filename}")
-    output = BytesIO()
-    df.to_excel(output, index=False)
-    output.seek(0)
-    print("[DEBUG] upload_to_slack: Sending request to Slack API...")
-    response = requests.post(
-        "https://slack.com/api/files.uploadV2",
-        headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
-        files={"file": (filename, output, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-        data={"channels": CHANNEL_ID, "title": filename}
-    )
-    print(f"[DEBUG] upload_to_slack: Slack response status_code={response.status_code}")
-
-    try:
-        json_res = response.json()
-    except Exception as e:
-        print(f"[DEBUG] upload_to_slack: Failed to parse JSON response: {e}")
-        json_res = {"ok": False, "error": "invalid_json"}
-
-    print(f"[DEBUG] upload_to_slack: Slack response ok={json_res.get('ok')}, error={json_res.get('error')}")
-    return json_res
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     print("[DEBUG] main: Function invoked")
@@ -65,31 +42,28 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
     sql = """ 
     SELECT 
-    database_salehead.id, 
-    database_salehead.entry_number, 
-    database_salehead.entry_date, 
-    database_salehead.branch_id, 
-    database_branch.name, 
-    database_branch.domain,  
-    database_purchaseitem.purchase_header_id, 
-    database_purchaseitem.purchase_value, 
-    database_purchaseitem.purchase_quantity, 
-    database_purchaseitem.purchase_free,
-    (database_purchaseitem.purchase_quantity + database_purchaseitem.purchase_free) AS 
-sum_of_PQ_PF
-FROM 
-    database_salehead
-JOIN 
-    database_branch ON database_salehead.branch_id = database_branch.id
-JOIN 
-    database_purchaseitem ON database_salehead.branch_id = database_purchaseitem.branch_id
-WHERE 
-    database_salehead.entry_date <> '' AND
-    database_salehead.entry_date IS NOT NULL AND
-    to_timestamp(database_salehead.entry_date, 'YYYY-MM-DD') >= (CURRENT_DATE - 
-INTERVAL '1 day') AND
-    to_timestamp(database_salehead.entry_date, 'YYYY-MM-DD') < CURRENT_DATE AND
-    (database_purchaseitem.purchase_quantity + database_purchaseitem.purchase_free) > 5000;
+        sh.id, 
+        sh.entry_number, 
+        sh.entry_date, 
+        sh.branch_id, 
+        b.name, 
+        b.domain,  
+        pi.purchase_header_id, 
+        pi.purchase_value, 
+        pi.purchase_quantity, 
+        pi.purchase_free,
+        (pi.purchase_quantity + pi.purchase_free) AS sum_of_PQ_PF
+    FROM 
+        database_salehead sh
+    JOIN 
+        database_branch b ON sh.branch_id = b.id
+    JOIN 
+        database_purchaseitem pi ON sh.branch_id = pi.branch_id
+    WHERE 
+        sh.entry_date IS NOT NULL AND sh.entry_date <> '' AND
+        TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD') >= (CURRENT_DATE - INTERVAL '1 day') AND
+        TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD') < CURRENT_DATE AND
+        (pi.purchase_quantity + pi.purchase_free) > 5000;
     """
 
     print("[DEBUG] main: Executing high quantity purchases query...")
@@ -104,7 +78,7 @@ INTERVAL '1 day') AND
         )
 
     print("[DEBUG] main: Uploading results to Slack...")
-    res = upload_to_slack(df, filename="highQuantity.xlsx")
+    res = upload_to_slack_external(df, "highQuantity.xlsx", CHANNEL_ID)
     print(f"[DEBUG] main: Upload completed. ok={res.get('ok')}, error={res.get('error')}")
 
     if res.get("ok"):

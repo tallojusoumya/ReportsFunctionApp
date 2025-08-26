@@ -3,9 +3,8 @@ import azure.functions as func
 import psycopg2
 import pandas as pd
 import os
-import requests
-from io import BytesIO
 import urllib.parse
+from utils.slack_uploader import upload_to_slack_external
 
 DB_URL = os.getenv("DB_URL")
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
@@ -29,28 +28,6 @@ def run_query(sql: str) -> pd.DataFrame:
         print(f"[DEBUG] run_query: Exception occurred: {e}")
         return pd.DataFrame()
 
-def upload_to_slack(df: pd.DataFrame, filename="headerMismatch.xlsx"):
-    print(f"[DEBUG] upload_to_slack: Preparing to upload. rows={len(df)}, filename={filename}")
-    output = BytesIO()
-    df.to_excel(output, index=False)
-    output.seek(0)
-    print("[DEBUG] upload_to_slack: Sending request to Slack API...")
-    response = requests.post(
-        "https://slack.com/api/files.uploadV2",
-        headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
-        files={"file": (filename, output, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-        data={"channels": CHANNEL_ID, "title": filename}
-    )
-    print(f"[DEBUG] upload_to_slack: Slack response status_code={response.status_code}")
-
-    try:
-        json_res = response.json()
-    except Exception as e:
-        print(f"[DEBUG] upload_to_slack: Failed to parse JSON response: {e}")
-        json_res = {"ok": False, "error": "invalid_json"}
-
-    print(f"[DEBUG] upload_to_slack: Slack response ok={json_res.get('ok')}, error={json_res.get('error')}")
-    return json_res
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     print("[DEBUG] main: Function invoked")
@@ -67,47 +44,47 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
            ABS(calculated_net_amount - net_amount) AS difference_amount
     FROM (
       SELECT
-          database_salehead.entry_date,
-          database_salehead.entry_number,
-          database_salehead.branch_id,
-          database_branch.name AS branch_name,
-          database_branch.domain,
-          database_client.name AS client_name,
-          database_salehead.billing_on,
-          database_salehead.net_amount,
-          database_salehead.gross_total,
-          database_salehead.total_gst,
-          database_salehead.total_disc,
-          SUM(database_salesitem.sale_value) AS item_total_sale_value,
-          SUM(database_salesitem.gst_value) AS item_total_gst_value,
-          SUM(database_salesitem.discount_amount) AS item_discount_sale_value,
-          database_salehead.id,
+          sh.entry_date,
+          sh.entry_number,
+          sh.branch_id,
+          b.name AS branch_name,
+          b.domain,
+          c.name AS client_name,
+          sh.billing_on,
+          sh.net_amount,
+          sh.gross_total,
+          sh.total_gst,
+          sh.total_disc,
+          SUM(si.sale_value) AS item_total_sale_value,
+          SUM(si.gst_value) AS item_total_gst_value,
+          SUM(si.discount_amount) AS item_discount_sale_value,
+          sh.id,
           SUM(
               CASE
-                WHEN database_salehead.billing_on IN ('3', '8', '9') THEN
+                WHEN sh.billing_on IN ('3', '8', '9') THEN
                   (
-                    sale_value - ((sale_value * database_salesitem.discount_amount) / 100) * 
-                    (1 - COALESCE(Customer.discount_factor, 0) / 100)
+                    si.sale_value - ((si.sale_value * si.discount_amount) / 100) * 
+                    (1 - COALESCE(cust.discount_factor, 0) / 100)
                     - CASE
-                        WHEN Settings.overide_item_with_header = true THEN 0
+                        WHEN setts.overide_item_with_header = true THEN 0
                         ELSE (
                           (
-                            (sale_value - ((sale_value * database_salesitem.discount_amount) / 100)) * 
-                            (1 - COALESCE(Customer.discount_factor, 0) / 100) * 
+                            (si.sale_value - ((si.sale_value * si.discount_amount) / 100)) * 
+                            (1 - COALESCE(cust.discount_factor, 0) / 100) * 
                             COALESCE(overall_disc, 0)
                           ) / 100
                         )
                       END
-                  ) / (1 + (database_salesitem.gst::double precision / 100))
+                  ) / (1 + (si.gst::double precision / 100))
                 ELSE
                   (
-                    sale_value - ((sale_value * database_salesitem.discount_amount) / 100) * 
-                    (1 - COALESCE(Customer.discount_factor, 0) / 100)
+                    si.sale_value - ((si.sale_value * si.discount_amount) / 100) * 
+                    (1 - COALESCE(cust.discount_factor, 0) / 100)
                     - CASE
-                        WHEN Settings.overide_item_with_header = true THEN 0
+                        WHEN setts.overide_item_with_header = true THEN 0
                         ELSE (
                           (
-                            (sale_value - ((sale_value * database_salesitem.discount_amount) / 100)) * 
+                            (si.sale_value - ((si.sale_value * si.discount_amount) / 100)) * 
                             COALESCE(overall_disc, 0)
                           ) / 100
                         )
@@ -117,16 +94,16 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
           )::numeric(16,2) AS items_tax_value,
           SUM(
               CASE
-                WHEN database_salehead.billing_on IN ('3', '8', '9') THEN
+                WHEN sh.billing_on IN ('3', '8', '9') THEN
                   (
-                    sale_value - ((sale_value * database_salesitem.discount_amount) / 100) * 
-                    (1 - COALESCE(Customer.discount_factor, 0) / 100)
+                    si.sale_value - ((si.sale_value * si.discount_amount) / 100) * 
+                    (1 - COALESCE(cust.discount_factor, 0) / 100)
                     - CASE
-                        WHEN Settings.overide_item_with_header = true THEN 0
+                        WHEN setts.overide_item_with_header = true THEN 0
                         ELSE (
                           (
-                            (sale_value - ((sale_value * database_salesitem.discount_amount) / 100)) * 
-                            (1 - COALESCE(Customer.discount_factor, 0) / 100) * 
+                            (si.sale_value - ((si.sale_value * si.discount_amount) / 100)) * 
+                            (1 - COALESCE(cust.discount_factor, 0) / 100) * 
                             COALESCE(overall_disc, 0)
                           ) / 100
                         )
@@ -134,51 +111,51 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                   )
                 ELSE
                   (
-                    sale_value - ((sale_value * database_salesitem.discount_amount) / 100) * 
-                    (1 - COALESCE(Customer.discount_factor, 0) / 100)
+                    si.sale_value - ((si.sale_value * si.discount_amount) / 100) * 
+                    (1 - COALESCE(cust.discount_factor, 0) / 100)
                     - CASE
-                        WHEN Settings.overide_item_with_header = true THEN 0
+                        WHEN setts.overide_item_with_header = true THEN 0
                         ELSE (
                           (
-                            (sale_value - ((sale_value * database_salesitem.discount_amount) / 100)) * 
+                            (si.sale_value - ((si.sale_value * si.discount_amount) / 100)) * 
                             COALESCE(overall_disc, 0)
                           ) / 100
                         )
                       END
-                  ) * (1 + (database_salesitem.gst::double precision / 100))
+                  ) * (1 + (si.gst::double precision / 100))
               END
           )::numeric(16,2) AS items_total_value,
           CASE
-            WHEN database_salehead.billing_on IN ('3', '8', '9') THEN
-              database_salehead.gross_total - database_salehead.total_disc
+            WHEN sh.billing_on IN ('3', '8', '9') THEN
+              sh.gross_total - sh.total_disc
             ELSE
-              database_salehead.gross_total + database_salehead.total_gst - database_salehead.total_disc
+              sh.gross_total + sh.total_gst - sh.total_disc
           END AS calculated_net_amount
       FROM
-          database_salehead
-      LEFT JOIN database_salesitem ON database_salehead.id = database_salesitem.sale_header_id
-      LEFT JOIN database_branch ON database_salehead.branch_id = database_branch.id
-      LEFT JOIN database_client ON database_branch.client_id = database_client.id
-      LEFT JOIN database_sale_settings AS Settings ON Settings.branch_id = database_salehead.branch_id
-      LEFT JOIN database_customer AS Customer ON Customer.id = database_salehead.customer_id_id
+          database_salehead sh
+      LEFT JOIN database_salesitem si ON sh.id = si.sale_header_id
+      LEFT JOIN database_branch b ON sh.branch_id = b.id
+      LEFT JOIN database_client c ON b.client_id = c.id
+      LEFT JOIN database_sale_settings setts ON setts.branch_id = sh.branch_id
+      LEFT JOIN database_customer cust ON cust.id = sh.customer_id_id
       WHERE
-          TRIM(database_salehead.entry_date) <> ''
-          AND TO_TIMESTAMP(database_salehead.entry_date, 'YYYY-MM-DD HH24:MI:SS') >= (CURRENT_DATE - INTERVAL '1 day')
-          AND TO_TIMESTAMP(database_salehead.entry_date, 'YYYY-MM-DD HH24:MI:SS') < CURRENT_DATE
+          TRIM(sh.entry_date) <> ''
+          AND TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD HH24:MI:SS') >= (CURRENT_DATE - INTERVAL '1 day')
+          AND TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD HH24:MI:SS') < CURRENT_DATE
       GROUP BY
-          database_salehead.entry_date,
-          database_salehead.entry_number,
-          database_salehead.id,
-          database_salehead.billing_on,
-          database_salehead.net_amount,
-          database_salehead.gross_total,
-          database_salehead.total_gst,
-          database_salehead.total_disc,
-          database_salehead.branch_id,
-          database_branch.name,
-          database_branch.domain,
-          database_client.id,
-          database_client.name
+          sh.entry_date,
+          sh.entry_number,
+          sh.id,
+          sh.billing_on,
+          sh.net_amount,
+          sh.gross_total,
+          sh.total_gst,
+          sh.total_disc,
+          sh.branch_id,
+          b.name,
+          b.domain,
+          c.id,
+          c.name
     ) AS sale_summary
     WHERE ABS(calculated_net_amount - net_amount) <> 0;
     """
@@ -195,7 +172,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         )
 
     print("[DEBUG] main: Uploading results to Slack...")
-    res = upload_to_slack(df, filename="headerMismatch.xlsx")
+    res = upload_to_slack_external(df, "headerMismatch.xlsx", CHANNEL_ID)
     print(f"[DEBUG] main: Upload completed. ok={res.get('ok')}, error={res.get('error')}")
 
     if res.get("ok"):
