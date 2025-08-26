@@ -3,9 +3,8 @@ import azure.functions as func
 import psycopg2
 import pandas as pd
 import os
-import requests
-from io import BytesIO
 import urllib.parse
+from utils.slack_uploader import upload_to_slack_external
 
 DB_URL = os.getenv("DB_URL")
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
@@ -28,29 +27,6 @@ def run_query(sql: str) -> pd.DataFrame:
         logging.error(f"Database error: {e}")
         print(f"[DEBUG] run_query: Exception occurred: {e}")
         return pd.DataFrame()
-
-def upload_to_slack(df: pd.DataFrame, filename="missingSequence.xlsx"):
-    print(f"[DEBUG] upload_to_slack: Preparing to upload. rows={len(df)}, filename={filename}")
-    output = BytesIO()
-    df.to_excel(output, index=False)
-    output.seek(0)
-    print("[DEBUG] upload_to_slack: Sending request to Slack API...")
-    response = requests.post(
-        "https://slack.com/api/files.uploadV2",
-        headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
-        files={"file": (filename, output, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-        data={"channels": CHANNEL_ID, "title": filename}
-    )
-    print(f"[DEBUG] upload_to_slack: Slack response status_code={response.status_code}")
-
-    try:
-        json_res = response.json()
-    except Exception as e:
-        print(f"[DEBUG] upload_to_slack: Failed to parse JSON response: {e}")
-        json_res = {"ok": False, "error": "invalid_json"}
-
-    print(f"[DEBUG] upload_to_slack: Slack response ok={json_res.get('ok')}, error={json_res.get('error')}")
-    return json_res
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     print("[DEBUG] main: Function invoked")
@@ -158,7 +134,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         )
 
     print("[DEBUG] main: Uploading results to Slack...")
-    res = upload_to_slack(df, filename="missingSequence.xlsx")
+    res = upload_to_slack_external(df, "missingSequence.xlsx", CHANNEL_ID)
     print(f"[DEBUG] main: Upload completed. ok={res.get('ok')}, error={res.get('error')}")
 
     if res.get("ok"):
