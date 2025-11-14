@@ -1,8 +1,6 @@
 azure-functions
 pandas
+sqlalchemy
 psycopg2-binary
-python-dotenv
-slack_sdk
 openpyxl
-flask
-requests
+slack_sdk

@@ -39,6 +39,13 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         print(f"[DEBUG] main: Failed to decode request body: {e}")
         body = ""
     data = urllib.parse.parse_qs(body)
+    print(f"[DEBUG] main: Data: {data.table}")
+    table_name = data.table
+
+    # if(table_name == "salehead"): 
+    #     000
+    # elif(table_name == "purchasehead"):
+    #     111
 
     sql = """ 
     SELECT 
@@ -77,17 +84,21 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json"
         )
 
-    print("[DEBUG] main: Uploading results to Slack...")
-    res = upload_to_slack_external(df, "highQuantity.xlsx", CHANNEL_ID)
-    print(f"[DEBUG] main: Upload completed. ok={res.get('ok')}, error={res.get('error')}")
+    # print("[DEBUG] main: Uploading results to Slack...")
+    # res = upload_to_slack_external(df, "highQuantity.xlsx", CHANNEL_ID)
+    # print(f"[DEBUG] main: Upload completed. ok={res.get('ok')}, error={res.get('error')}")
 
-    if res.get("ok"):
-        return func.HttpResponse(
-            '{"response_type":"in_channel","text":"⚠️ High quantity purchases detected, Excel file uploaded 📂"}',
-            mimetype="application/json"
-        )
-    else:
-        return func.HttpResponse(
-            f'{{"response_type":"ephemeral","text":"❌ Slack upload failed: {res.get("error")}"}}',
-            mimetype="application/json"
-        )
+    # if res.get("ok"):
+    #     return func.HttpResponse(
+    #         '{"response_type":"in_channel","text":"⚠️ High quantity purchases detected, Excel file uploaded 📂"}',
+    #         mimetype="application/json"
+    #     )
+    # else:
+    #     return func.HttpResponse(
+    #         f'{{"response_type":"ephemeral","text":"❌ Slack upload failed: {res.get("error")}"}}',
+    #         mimetype="application/json"
+    #     )
+    return func.HttpResponse(
+        '{"data": "testing response on table -- {table_name}"}',
+        mimetype="application/json"
+    )
