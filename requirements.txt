@@ -4,3 +4,7 @@ sqlalchemy
 psycopg2-binary
 openpyxl
 slack_sdk
+pytz
+python-dotenv
+requests
+
