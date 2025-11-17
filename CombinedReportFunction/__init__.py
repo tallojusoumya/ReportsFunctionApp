@@ -19,9 +19,7 @@ SLACK_CHANNEL = os.getenv("SLACK_CHANNEL")
 engine = create_engine(POSTGRES_URL)
 slack_client = WebClient(token=SLACK_TOKEN)
 
-# -----------------------------
-# 🔳 DEFINE 9 SHEETS × 4 QUERIES
-# -----------------------------
+
 TABLES = {
         "Database_salehead": {
         "Invoice_Sequence_Missing": """SELECT
@@ -2119,27 +2117,21 @@ WHERE
     }
 }
 
-# -----------------------------
-# 📘 Function: Create the Excel
-# -----------------------------
+
 def build_excel_file():
     wb = Workbook()
-    wb.remove(wb.active)  # remove default sheet
+    wb.remove(wb.active) 
 
     for sheet_name, queries in TABLES.items():
         ws = wb.create_sheet(title=sheet_name)
 
-        # -----------------------------
-        # Header: Report timestamp
-        # -----------------------------
+       
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S IST")
         ws.append([f"Report generated on: {timestamp}"])
         ws.cell(row=1, column=1).font = Font(bold=True, color="000000")
         ws.append([])
 
-        # -----------------------------
-        # Each Query in the sheet
-        # -----------------------------
+        
         for query_title, sql in queries.items():
 
             # Query title (bold)
@@ -2165,14 +2157,12 @@ def build_excel_file():
             # Blank line after each query
             ws.append([])
 
-    # create temporary file
+   
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
     wb.save(tmp.name)
     return tmp.name
 
-# -----------------------------
-# 🚀 Upload to Slack
-# -----------------------------
+
 def upload_to_slack(filepath):
     try:
         slack_client.files_upload_v2(
@@ -2184,9 +2174,7 @@ def upload_to_slack(filepath):
     except SlackApiError as e:
         logging.error(f"Slack Upload Failed: {e}")
 
-# -----------------------------
-# 🔥 HTTP Trigger
-# -----------------------------
+
 async def main(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("Combined Report Function Triggered.")
 
