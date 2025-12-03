@@ -5,95 +5,96 @@
 # ============================================================================
 INVOICE_SEQUENCE_MISSING_QUERY = """
     SELECT 
-        srh.entry_number,
-        srh.entry_date,
-     b2b.is_b2b_bill,
-        srh.id,
-        mn.branch_id,
-        b.name AS branch_name,
-        b.domain,
-        mn.entry_prefix || LPAD(mn.expected_num::TEXT, 4, '0') AS missing_entry_number
-
+    srh.id,
+    srh.entry_number,
+    srh.entry_date,
+    b2b.is_b2b_bill,
+    mn.branch_id,
+    b.name AS branch_name,
+    b.domain,
+    mn.entry_prefix || LPAD(mn.expected_num::TEXT, 4, '0') AS missing_entry_number
+FROM (
+    SELECT 
+        an.entry_prefix,
+        an.branch_id,
+        an.expected_num
     FROM (
         SELECT 
-            an.entry_prefix,
-            an.branch_id,
-            an.expected_num
+            nr.entry_prefix,
+            nr.branch_id,
+            generate_series(nr.min_num, nr.max_num) AS expected_num
         FROM (
             SELECT 
-                nr.entry_prefix,
-                nr.branch_id,
-                generate_series(nr.min_num, nr.max_num) AS expected_num
+                entry_prefix,
+                branch_id,
+                MIN(num_part) AS min_num,
+                MAX(num_part) AS max_num
             FROM (
                 SELECT 
-                    entry_prefix,
-                    branch_id,
-                    MIN(num_part) AS min_num,
-                    MAX(num_part) AS max_num
-                FROM (
-                    SELECT 
-                        sh.branch_id,
-                        LEFT(sh.entry_number, LENGTH(sh.entry_number) - 4) AS entry_prefix,
-                        RIGHT(sh.entry_number, 4)::INTEGER AS num_part,
-                        sh.is_b2b_bill
-                    FROM 
-                        database_salereturnhead sh
-                    WHERE 
-                        sh.entry_number IS NOT NULL
-                        AND LENGTH(sh.entry_number) >= 4
-                        AND RIGHT(sh.entry_number, 4) ~ '^\d{4}$'
-                        AND TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD HH24:MI:SS') >= CURRENT_DATE - INTERVAL '1 days'
-                        AND TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD HH24:MI:SS') <= CURRENT_DATE
-                ) AS extracted_numbers
-                GROUP BY entry_prefix, branch_id
-            ) AS nr
-        ) AS an
-        LEFT JOIN (
-            SELECT 
-                sh.branch_id,
-                LEFT(sh.entry_number, LENGTH(sh.entry_number) - 4) AS entry_prefix,
-                RIGHT(sh.entry_number, 4)::INTEGER AS num_part
-            FROM 
-                database_salereturnhead sh
-            WHERE 
-                sh.entry_number IS NOT NULL
-                AND LENGTH(sh.entry_number) >= 4
-                AND RIGHT(sh.entry_number, 4) ~ '^\d{4}$'
-                AND TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD HH24:MI:SS') >= CURRENT_DATE - INTERVAL '1 days'
-                AND TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD HH24:MI:SS') <= CURRENT_DATE
-        ) AS e
-            ON an.entry_prefix = e.entry_prefix
-            AND an.branch_id = e.branch_id
-            AND an.expected_num = e.num_part
-        WHERE e.num_part IS NULL
-    ) AS mn
-    JOIN 
-        database_branch b ON mn.branch_id = b.id
+                    sh.branch_id,
+                    LEFT(sh.entry_number, LENGTH(sh.entry_number) - 4) AS entry_prefix,
+                    RIGHT(sh.entry_number, 4)::INTEGER AS num_part
+                FROM 
+                    database_salereturnhead sh
+                WHERE 
+                    sh.entry_number IS NOT NULL
+                    AND LENGTH(sh.entry_number) >= 4
+                    AND RIGHT(sh.entry_number, 4) ~ '^\d{4}$'
+                    AND TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD HH24:MI:SS') >= CURRENT_DATE - INTERVAL '1 day'
+                    AND TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD HH24:MI:SS') <= CURRENT_DATE
+            ) AS extracted_numbers
+            GROUP BY entry_prefix, branch_id
+        ) AS nr
+    ) AS an
     LEFT JOIN (
-        SELECT DISTINCT ON (
-            LEFT(sh.entry_number, LENGTH(sh.entry_number) - 4), sh.branch_id
-        )
-            LEFT(sh.entry_number, LENGTH(sh.entry_number) - 4) AS entry_prefix,
+        SELECT 
             sh.branch_id,
-            sh.is_b2b_bill
+            LEFT(sh.entry_number, LENGTH(sh.entry_number) - 4) AS entry_prefix,
+            RIGHT(sh.entry_number, 4)::INTEGER AS num_part
         FROM 
             database_salereturnhead sh
         WHERE 
             sh.entry_number IS NOT NULL
             AND LENGTH(sh.entry_number) >= 4
             AND RIGHT(sh.entry_number, 4) ~ '^\d{4}$'
-            AND TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD HH24:MI:SS') >= CURRENT_DATE - INTERVAL '1 days'
+            AND TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD HH24:MI:SS') >= CURRENT_DATE - INTERVAL '1 day'
             AND TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD HH24:MI:SS') <= CURRENT_DATE
-    ) AS b2b
-        ON mn.entry_prefix = b2b.entry_prefix
-        AND mn.branch_id = b2b.branch_id
-    LEFT JOIN 
-        database_salereturnhead srh
-        ON srh.branch_id = mn.branch_id
-        AND LEFT(srh.entry_number, LENGTH(srh.entry_number) - 4) = mn.entry_prefix
-    ORDER BY 
-        mn.branch_id,
-        missing_entry_number;
+    ) AS e
+        ON an.entry_prefix = e.entry_prefix
+        AND an.branch_id = e.branch_id
+        AND an.expected_num = e.num_part
+    WHERE e.num_part IS NULL
+) AS mn
+
+JOIN 
+    database_branch b ON mn.branch_id = b.id
+
+LEFT JOIN (
+    SELECT DISTINCT ON (LEFT(sh.entry_number, LENGTH(sh.entry_number) - 4), sh.branch_id)
+        LEFT(sh.entry_number, LENGTH(sh.entry_number) - 4) AS entry_prefix,
+        sh.branch_id,
+        sh.is_b2b_bill
+    FROM 
+        database_salereturnhead sh
+    WHERE 
+        sh.entry_number IS NOT NULL
+        AND LENGTH(sh.entry_number) >= 4
+        AND RIGHT(sh.entry_number, 4) ~ '^\d{4}$'
+        AND TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD HH24:MI:SS') >= CURRENT_DATE - INTERVAL '1 day'
+        AND TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD HH24:MI:SS') <= CURRENT_DATE
+) AS b2b
+    ON mn.entry_prefix = b2b.entry_prefix
+    AND mn.branch_id = b2b.branch_id
+
+LEFT JOIN 
+    database_salereturnhead srh
+    ON srh.branch_id = mn.branch_id
+    AND srh.entry_number = mn.entry_prefix || LPAD(mn.expected_num::TEXT, 4, '0')
+
+ORDER BY 
+    mn.branch_id,
+    missing_entry_number;
+
 """
 
 # ============================================================================
@@ -262,31 +263,29 @@ ITEM_HEADER_MISMATCH_QUERY = """
 # ============================================================================
 HIGH_PURCHASE_QTY_QUERY = """
     SELECT 
-        srh.id, 
-        srh.entry_number, 
-        srh.entry_date, 
-        srh.branch_id,
-        b.name AS branch_name, 
-        b.domain,  
-        sri.sale_return_header_id, 
-        sri.sale_value, 
-        sri.sale_quantity, 
-        sri.sale_free,
-        (sri.sale_quantity + sri.sale_free) AS sum_of_SQ_SF
-    FROM 
-        database_salereturnhead srh
-    JOIN 
-        database_branch b 
-            ON srh.branch_id = b.id
-    JOIN 
-        database_salereturnitem sri 
-            ON srh.id = sri.sale_return_header_id
-    WHERE 
-        srh.entry_date IS NOT NULL 
-        AND srh.entry_date <> ''
-        AND TO_TIMESTAMP(srh.entry_date, 'YYYY-MM-DD') >= (CURRENT_DATE - INTERVAL '1 day')
-        AND TO_TIMESTAMP(srh.entry_date, 'YYYY-MM-DD') < CURRENT_DATE
-        AND (sri.sale_quantity + sri.sale_free) > 5000;
+    srh.id,
+    srh.entry_number,
+    srh.entry_date,
+    srh.branch_id,
+    b.name AS branch_name,
+    b.domain,
+    sri.sale_return_header_id,
+    sri.sale_value,
+    sri.sale_quantity,
+    sri.sale_free,
+    (sri.sale_quantity + sri.sale_free) AS sum_of_SQ_SF
+FROM 
+    database_salereturnitem sri
+JOIN 
+    database_salereturnhead srh
+        ON sri.sale_return_header_id = srh.id
+JOIN
+    database_branch b
+        ON srh.branch_id = b.id
+WHERE 
+    TO_DATE(srh.entry_date, 'YYYY-MM-DD') = CURRENT_DATE - INTERVAL '1 day'
+    AND (sri.sale_quantity + sri.sale_free) > 5000;
+
 """
 
 
@@ -298,4 +297,8 @@ QUERIES = {
     "Invoice_Duplicates": INVOICE_DUPLICATES_QUERY,
     "Item_Header_Mismatch": ITEM_HEADER_MISMATCH_QUERY,
     "High_Purchase_Quantity(PurchaseQuantity + PurchaseFree>5000)": HIGH_PURCHASE_QTY_QUERY,
+}
+
+TABLES = {
+    "Database_salereturnhead": QUERIES
 }

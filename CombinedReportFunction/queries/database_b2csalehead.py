@@ -5,73 +5,68 @@
 # ============================================================================
 INVOICE_SEQUENCE_MISSING_QUERY = """
     SELECT
-      sh.id,
-      sh.entry_number,
-      sh.entry_date,
-      b.name AS branch_name,
-      b.domain,
-      mn.entry_prefix || LPAD(mn.expected_num::TEXT, 4, '0') AS missing_entry_number,
-      mn.branch_id
+    b2csh.id,
+    b2csh.entry_number,
+    b2csh.entry_date,
+    database_branch.id          AS branch_id,
+    database_branch.name        AS branch_name,
+    database_branch.domain      AS branch_domain,
+    missing_numbers.missing_entry_number
+FROM (
+    SELECT
+        full_range.entry_prefix,
+        full_range.branch_id,
+        full_range.expected_num,
+        full_range.entry_prefix || LPAD(full_range.expected_num::TEXT, 4, '0') AS missing_entry_number
     FROM (
-      SELECT
-        an.entry_prefix,
-        an.branch_id,
-        an.expected_num
-      FROM (
         SELECT
-          nr.entry_prefix,
-          nr.branch_id,
-          generate_series(nr.min_num, nr.max_num) AS expected_num
+            numbered_entries.entry_prefix,
+            numbered_entries.branch_id,
+            generate_series(numbered_entries.min_num, numbered_entries.max_num) AS expected_num
         FROM (
-          SELECT
-            entry_prefix,
-            branch_id,
-            MIN(num_part) AS min_num,
-            MAX(num_part) AS max_num
-          FROM (
             SELECT
-              sh.branch_id,
-              LEFT(sh.entry_number, LENGTH(sh.entry_number) - 4) AS entry_prefix,
-              RIGHT(sh.entry_number, 4)::INTEGER AS num_part
-            FROM
-              database_b2csalehead sh
-            WHERE
-              sh.entry_number IS NOT NULL
-              AND LENGTH(sh.entry_number) >= 4
-              AND RIGHT(sh.entry_number, 4) ~ '^\d{4}$'
-              AND TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD HH24:MI:SS') >= CURRENT_DATE - INTERVAL '1 days'
-              AND TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD HH24:MI:SS') <= CURRENT_DATE
-          ) AS extracted_numbers
-          GROUP BY entry_prefix, branch_id
-        ) AS nr
-      ) AS an
-      LEFT JOIN (
-        SELECT
-          sh.branch_id,
-          LEFT(sh.entry_number, LENGTH(sh.entry_number) - 4) AS entry_prefix,
-          RIGHT(sh.entry_number, 4)::INTEGER AS num_part
-        FROM
-          database_b2csalehead sh
-        WHERE
-          sh.entry_number IS NOT NULL
-          AND LENGTH(sh.entry_number) >= 4
-          AND RIGHT(sh.entry_number, 4) ~ '^\d{4}$'
-          AND TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD HH24:MI:SS') >= CURRENT_DATE - INTERVAL '1 days'
-          AND TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD HH24:MI:SS') <= CURRENT_DATE
-      ) AS e
-        ON an.entry_prefix = e.entry_prefix
-        AND an.branch_id = e.branch_id
-        AND an.expected_num = e.num_part
-      WHERE e.num_part IS NULL
-    ) AS mn
-    JOIN database_branch b
-      ON mn.branch_id = b.id
-    LEFT JOIN database_b2csalehead sh
-      ON sh.branch_id = mn.branch_id
-      AND LEFT(sh.entry_number, LENGTH(sh.entry_number) - 4) = mn.entry_prefix
-    ORDER BY
-      mn.branch_id,
-      missing_entry_number;
+                parsed_rows.branch_id,
+                parsed_rows.entry_prefix,
+                MIN(parsed_rows.number_part) AS min_num,
+                MAX(parsed_rows.number_part) AS max_num
+            FROM (
+                SELECT
+                    b2csh.branch_id,
+                    LEFT(b2csh.entry_number, LENGTH(b2csh.entry_number) - 4) AS entry_prefix,
+                    RIGHT(b2csh.entry_number, 4)::INTEGER AS number_part
+                FROM
+                    database_b2csalehead AS b2csh
+                WHERE
+                    b2csh.entry_number IS NOT NULL
+                    AND b2csh.entry_number <> ''
+                    AND TO_TIMESTAMP(b2csh.entry_date, 'YYYY-MM-DD HH24:MI:SS')
+                        >= CURRENT_DATE - INTERVAL '1 day'
+                    AND TO_TIMESTAMP(b2csh.entry_date, 'YYYY-MM-DD HH24:MI:SS')
+                        < CURRENT_DATE
+            ) AS parsed_rows
+            GROUP BY
+                parsed_rows.branch_id,
+                parsed_rows.entry_prefix
+        ) AS numbered_entries
+    ) AS full_range
+    LEFT JOIN database_b2csalehead AS b2c_existing
+        ON b2c_existing.entry_number =
+           full_range.entry_prefix || LPAD(full_range.expected_num::TEXT, 4, '0')
+       AND b2c_existing.branch_id = full_range.branch_id
+    WHERE b2c_existing.entry_number IS NULL
+) AS missing_numbers
+
+JOIN database_branch
+    ON database_branch.id = missing_numbers.branch_id
+
+LEFT JOIN database_b2csalehead AS b2csh
+    ON b2csh.entry_number = missing_numbers.missing_entry_number
+   AND b2csh.branch_id = missing_numbers.branch_id
+
+ORDER BY
+    database_branch.id,
+    missing_numbers.missing_entry_number;
+
 """
 
 # ============================================================================
@@ -240,29 +235,29 @@ ITEM_HEADER_MISMATCH_QUERY = """
 # ============================================================================
 HIGH_PURCHASE_QTY_QUERY = """
     SELECT 
-        database_b2csalehead.id, 
-        database_b2csalehead.entry_number, 
-        database_b2csalehead.entry_date, 
-        database_b2csalehead.branch_id, 
-        database_branch.name, 
-        database_branch.domain,  
-        database_purchaseitem.purchase_header_id, 
-        database_purchaseitem.purchase_value, 
-        database_purchaseitem.purchase_quantity, 
-        database_purchaseitem.purchase_free,
-        (database_purchaseitem.purchase_quantity + database_purchaseitem.purchase_free) AS sum_of_PQ_PF
-    FROM 
-        database_b2csalehead
-    JOIN 
-        database_branch ON database_b2csalehead.branch_id = database_branch.id
-    JOIN 
-        database_purchaseitem ON database_b2csalehead.branch_id = database_purchaseitem.branch_id
-    WHERE 
-        database_b2csalehead.entry_date <> '' 
-        AND database_b2csalehead.entry_date IS NOT NULL 
-        AND to_timestamp(database_b2csalehead.entry_date, 'YYYY-MM-DD') >= (CURRENT_DATE - INTERVAL '1 day') 
-        AND to_timestamp(database_b2csalehead.entry_date, 'YYYY-MM-DD') < CURRENT_DATE 
-        AND (database_purchaseitem.purchase_quantity + database_purchaseitem.purchase_free) > 5000;
+    b2c.id,
+    b2c.entry_number,
+    b2c.entry_date,
+    b2c.branch_id,
+	pi.purchase_header_id,
+    pi.purchase_value,
+    pi.purchase_quantity,
+    pi.purchase_free,
+    (pi.purchase_quantity + pi.purchase_free) AS sum_of_PQ_PF
+FROM 
+    database_purchaseitem pi
+JOIN 
+    database_purchasehead ph 
+        ON pi.purchase_header_id = ph.id
+JOIN
+    database_b2csalehead b2c
+        ON b2c.branch_id = ph.branch_id
+       AND TO_DATE(b2c.entry_date, 'YYYY-MM-DD') = TO_DATE(ph.entry_date, 'YYYY-MM-DD')
+WHERE 
+    TO_DATE(ph.entry_date, 'YYYY-MM-DD') = CURRENT_DATE - INTERVAL '1 day'
+    AND (pi.purchase_quantity + pi.purchase_free) > 5000;
+
+
 """
 
 
@@ -274,4 +269,8 @@ QUERIES = {
     "Invoice_Duplicates": INVOICE_DUPLICATES_QUERY,
     "Item_Header_Mismatch": ITEM_HEADER_MISMATCH_QUERY,
     "High_Purchase_Quantity(PurchaseQuantity + PurchaseFree>5000)": HIGH_PURCHASE_QTY_QUERY,
+}
+
+TABLES = {
+    "Database_b2csalehead": QUERIES
 }

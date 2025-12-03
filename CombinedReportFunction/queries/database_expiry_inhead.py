@@ -5,74 +5,58 @@
 # ============================================================================
 INVOICE_SEQUENCE_MISSING_QUERY = """
     SELECT
-      sh.id,
-      sh.entry_date,
-      sh.entry_number,
-      mn.entry_prefix || LPAD(mn.expected_num::TEXT, 4, '0') AS missing_entry_number,
-      mn.branch_id,
-      b.name,
-      b.domain
+    expiryinhead.id,
+    expiryinhead.entry_number,
+    expiryinhead.entry_date,
+    database_branch.id AS branch_id,
+    database_branch.name AS branch_name,
+    database_branch.domain,
+    missing_numbers.expected_entry_number AS missing_entry_number
+FROM (
+    SELECT
+        expected_numbers.branch_id,
+        expected_numbers.prefix,
+        expected_numbers.expected_num,
+        expected_numbers.prefix || LPAD(expected_numbers.expected_num::TEXT, 4, '0') AS expected_entry_number
     FROM (
-      SELECT
-        an.entry_prefix,
-        an.branch_id,
-        an.expected_num
-      FROM (
         SELECT
-          nr.entry_prefix,
-          nr.branch_id,
-          generate_series(nr.min_num, nr.max_num) AS expected_num
+            entry_prefix_info.branch_id,
+            entry_prefix_info.prefix,
+            generate_series(entry_prefix_info.min_num, entry_prefix_info.max_num) AS expected_num
         FROM (
-          SELECT
-            entry_prefix,
-            branch_id,
-            MIN(num_part) AS min_num,
-            MAX(num_part) AS max_num
-          FROM (
+            
             SELECT
-              sh.branch_id,
-              LEFT(sh.entry_number, LENGTH(sh.entry_number) - 4) AS entry_prefix,
-              RIGHT(sh.entry_number, 4)::INTEGER AS num_part
+                expiryinhead.branch_id,
+                LEFT(expiryinhead.entry_number, LENGTH(expiryinhead.entry_number) - 4) AS prefix,
+                MIN(RIGHT(expiryinhead.entry_number, 4)::INT) AS min_num,
+                MAX(RIGHT(expiryinhead.entry_number, 4)::INT) AS max_num
             FROM
-              database_expiryinhead sh
+                database_expiryinhead AS expiryinhead
             WHERE
-              sh.entry_number IS NOT NULL
-              AND LENGTH(sh.entry_number) >= 4
-              AND RIGHT(sh.entry_number, 4) ~ '^\d{4}$'
-              AND TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD HH24:MI:SS') >= CURRENT_DATE - INTERVAL '1 days'
-              AND TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD HH24:MI:SS') <= CURRENT_DATE
-          ) AS extracted_numbers
-          GROUP BY entry_prefix, branch_id
-        ) AS nr
-      ) AS an
-      LEFT JOIN (
-        SELECT
-          sh.branch_id,
-          LEFT(sh.entry_number, LENGTH(sh.entry_number) - 4) AS entry_prefix,
-          RIGHT(sh.entry_number, 4)::INTEGER AS num_part
-        FROM
-          database_expiryinhead sh
-        WHERE
-          sh.entry_number IS NOT NULL
-          AND LENGTH(sh.entry_number) >= 4
-          AND RIGHT(sh.entry_number, 4) ~ '^\d{4}$'
-          AND TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD HH24:MI:SS') >= CURRENT_DATE - INTERVAL '1 days'
-          AND TO_TIMESTAMP(sh.entry_date, 'YYYY-MM-DD HH24:MI:SS') <= CURRENT_DATE
-      ) AS e
-        ON an.entry_prefix = e.entry_prefix
-        AND an.branch_id = e.branch_id
-        AND an.expected_num = e.num_part
-      WHERE e.num_part IS NULL
-    ) AS mn
-    JOIN
-      database_branch b ON mn.branch_id = b.id
-    LEFT JOIN 
-      database_expiryinhead sh 
-      ON sh.branch_id = mn.branch_id 
-      AND LEFT(sh.entry_number, LENGTH(sh.entry_number) - 4) = mn.entry_prefix
-    ORDER BY
-      mn.branch_id,
-      missing_entry_number;
+                expiryinhead.entry_number IS NOT NULL
+            GROUP BY
+                expiryinhead.branch_id,
+                LEFT(expiryinhead.entry_number, LENGTH(expiryinhead.entry_number) - 4)
+        ) AS entry_prefix_info
+    ) AS expected_numbers
+) AS missing_numbers
+
+
+LEFT JOIN database_expiryinhead AS expiryinhead
+    ON expiryinhead.entry_number = missing_numbers.expected_entry_number
+   AND expiryinhead.branch_id = missing_numbers.branch_id
+
+
+JOIN database_branch
+    ON missing_numbers.branch_id = database_branch.id
+
+
+WHERE expiryinhead.entry_number IS NULL
+
+ORDER BY
+    missing_numbers.branch_id,
+    missing_numbers.expected_entry_number;
+
 """
 
 # ============================================================================
@@ -195,29 +179,33 @@ ITEM_HEADER_MISMATCH_QUERY = """
 # ============================================================================
 HIGH_PURCHASE_QTY_QUERY = """
     SELECT 
-        database_expiryinhead.id, 
-        database_expiryinhead.entry_number, 
-        database_expiryinhead.entry_date, 
-        database_expiryinhead.branch_id, 
-        database_branch.name, 
-        database_branch.domain,  
-        database_purchaseitem.purchase_header_id, 
-        database_purchaseitem.purchase_value, 
-        database_purchaseitem.purchase_quantity, 
-        database_purchaseitem.purchase_free,
-        (database_purchaseitem.purchase_quantity + database_purchaseitem.purchase_free) AS sum_of_PQ_PF
-    FROM 
-        database_expiryinhead
-    JOIN 
-        database_branch ON database_expiryinhead.branch_id = database_branch.id
-    JOIN 
-        database_purchaseitem ON database_expiryinhead.branch_id = database_purchaseitem.branch_id
-    WHERE 
-        database_expiryinhead.entry_date <> '' AND
-        database_expiryinhead.entry_date IS NOT NULL AND
-        to_timestamp(database_expiryinhead.entry_date, 'YYYY-MM-DD') >= (CURRENT_DATE - INTERVAL '1 day') AND
-        to_timestamp(database_expiryinhead.entry_date, 'YYYY-MM-DD') < CURRENT_DATE AND
-        (database_purchaseitem.purchase_quantity + database_purchaseitem.purchase_free) > 5000;
+    expiryinhead.id,
+    expiryinhead.entry_number,
+    expiryinhead.entry_date,
+    expiryinhead.branch_id,
+    b.name AS branch_name,
+    b.domain,
+    pi.purchase_header_id,
+    pi.purchase_value,
+    pi.purchase_quantity,
+    pi.purchase_free,
+    (pi.purchase_quantity + pi.purchase_free) AS sum_of_PQ_PF
+FROM 
+    database_purchaseitem pi
+JOIN 
+    database_purchasehead ph 
+        ON pi.purchase_header_id = ph.id
+JOIN
+    database_expiryinhead expiryinhead
+        ON expiryinhead.branch_id = ph.branch_id
+       AND TO_DATE(expiryinhead.entry_date, 'YYYY-MM-DD') = TO_DATE(ph.entry_date, 'YYYY-MM-DD')
+JOIN
+    database_branch b
+        ON expiryinhead.branch_id = b.id
+WHERE 
+    TO_DATE(ph.entry_date, 'YYYY-MM-DD') = CURRENT_DATE - INTERVAL '1 day'
+    AND (pi.purchase_quantity + pi.purchase_free) > 5000;
+
 """
 
 
@@ -229,4 +217,8 @@ QUERIES = {
     "Invoice_Duplicates": INVOICE_DUPLICATES_QUERY,
     "Item_Header_Mismatch": ITEM_HEADER_MISMATCH_QUERY,
     "High_Purchase_Quantity(PurchaseQuantity + PurchaseFree>5000)": HIGH_PURCHASE_QTY_QUERY,
+}
+
+TABLES = {
+    "Database_expiry_inhead": QUERIES
 }
