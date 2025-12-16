@@ -24,7 +24,6 @@ FROM (
             entry_prefix_info.prefix,
             generate_series(entry_prefix_info.min_num, entry_prefix_info.max_num) AS expected_num
         FROM (
-            
             SELECT
                 expiryinhead.branch_id,
                 LEFT(expiryinhead.entry_number, LENGTH(expiryinhead.entry_number) - 4) AS prefix,
@@ -34,6 +33,9 @@ FROM (
                 database_expiryinhead AS expiryinhead
             WHERE
                 expiryinhead.entry_number IS NOT NULL
+                AND expiryinhead.entry_date IS NOT NULL
+                AND expiryinhead.entry_date <> ''
+                AND expiryinhead.entry_date::date = CURRENT_DATE - INTERVAL '1 day'
             GROUP BY
                 expiryinhead.branch_id,
                 LEFT(expiryinhead.entry_number, LENGTH(expiryinhead.entry_number) - 4)
@@ -41,15 +43,12 @@ FROM (
     ) AS expected_numbers
 ) AS missing_numbers
 
-
 LEFT JOIN database_expiryinhead AS expiryinhead
     ON expiryinhead.entry_number = missing_numbers.expected_entry_number
    AND expiryinhead.branch_id = missing_numbers.branch_id
 
-
 JOIN database_branch
     ON missing_numbers.branch_id = database_branch.id
-
 
 WHERE expiryinhead.entry_number IS NULL
 
